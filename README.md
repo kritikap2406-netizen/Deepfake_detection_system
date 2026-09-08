@@ -1,9 +1,11 @@
 # TrueSight
 
-**Multi-stream deepfake detection system** — Smart India Hackathon 2026, Theme: Cyber Security
-Team CipherForge
+**Multi-stream deepfake detection system**
+Smart India Hackathon 2026 · Theme: Cyber Security · Team CipherForge
 
-TrueSight detects whether a face in an image or video has been digitally manipulated. Instead of relying on a single model, it runs four independent detection streams on every face, fuses their evidence with a calibrated meta-classifier, and explains *why* it reached its verdict with Grad-CAM++ heatmaps and region-level evidence — rather than just outputting "Fake" or "Real."
+TrueSight looks at a face in an image or video and answers one question: *has this face been digitally manipulated?* Instead of trusting a single AI model, it runs **four independent detection streams** on every face it finds, combines their evidence with a calibrated decision model, and — critically — **explains its reasoning** with heatmaps and plain-language evidence, instead of just printing "Fake" or "Real" with no justification.
+
+This document is written so that someone who has never seen this codebase before — including a total beginner — can get it running and understand what it's doing.
 
 ```
 IMAGE / VIDEO
@@ -35,7 +37,8 @@ FACE DETECTION & ALIGNMENT
 
 ## Table of contents
 
-- [What this actually is](#what-this-actually-is)
+- [What this project is](#what-this-project-is)
+- [Why "multi-stream"?](#why-multi-stream)
 - [Quick start](#quick-start)
 - [Full setup, step by step](#full-setup-step-by-step)
 - [Running the system](#running-the-system)
@@ -47,27 +50,45 @@ FACE DETECTION & ALIGNMENT
 - [Known limitations](#known-limitations)
 - [Development order](#development-order)
 - [Team](#team)
+- [Glossary](#glossary)
 
 ---
 
-## What this actually is
+## What this project is
 
-This is a **working, end-to-end prototype**, not a mockup. Every module listed below is real, tested code — not a stub that returns a hardcoded value. Concretely:
+TrueSight is a **working, end-to-end prototype** — every module below is real, tested code, not a stub or a placeholder that returns a hardcoded answer. Concretely, this repository contains:
 
-- A real EfficientNet-B0 spatial classifier, trained with focal loss, class balancing, and JPEG/blur/noise/resize augmentation.
-- Real FFT/DCT frequency-domain analysis and real SRM (Spatial Rich Model) noise-residual filters, each feeding a lightweight from-scratch CNN.
-- Real blink detection (Eye Aspect Ratio) and real rPPG (remote photoplethysmography) signal extraction with Butterworth bandpass filtering — verified to correctly distinguish a genuine periodic pulse signal from noise.
-- A real XGBoost / Logistic Regression / MLP fusion comparison, with the winner selected automatically.
-- Real temperature-scaling calibration, verified to cut Negative Log-Likelihood and Expected Calibration Error on a synthetically miscalibrated model.
-- Real Grad-CAM++ implemented via forward/backward hooks on the actual EfficientNet architecture, producing real heatmap images.
-- A real FastAPI backend and a real React + Vite frontend, tested against each other over actual HTTP requests, not mocks.
-- A real ONNX export, numerically verified to match the PyTorch model's output exactly.
+- A real **EfficientNet-B0** spatial classifier, trained with focal loss, class balancing, and JPEG/blur/noise/resize augmentation, that looks for visual manipulation artifacts in a face crop.
+- Real **FFT/DCT frequency-domain analysis** and real **SRM (Spatial Rich Model) noise-residual filters**, each feeding a lightweight from-scratch CNN — these catch artifacts that generative models leave behind but that are invisible to the naked eye.
+- Real **blink detection** (Eye Aspect Ratio) and real **rPPG** (remote photoplethysmography — detecting a person's pulse from subtle skin-color changes on video), with Butterworth bandpass filtering, verified to correctly tell a genuine periodic pulse apart from noise.
+- A real **fusion comparison** between XGBoost, Logistic Regression, and a small MLP, with the best-performing one selected automatically.
+- Real **temperature-scaling calibration**, verified to reduce Negative Log-Likelihood and Expected Calibration Error on a synthetically miscalibrated model — this is what turns a raw model score into a confidence number you can actually trust.
+- Real **Grad-CAM++**, implemented directly via forward/backward hooks on the EfficientNet architecture, producing genuine heatmap images (not simulated ones).
+- A real **FastAPI backend** and a real **React + Vite frontend**, tested against each other over actual HTTP requests, not mocks.
+- A real **ONNX export**, numerically verified to match the PyTorch model's output exactly.
 
-At the same time, this repository is honest about what it can't yet claim. The dataset shipped in `datasets/` is a tiny **synthetic placeholder** (48 non-photographic files), used purely to prove every stage of the pipeline runs correctly end-to-end. **No accuracy number in this repository should be read as a real-world performance claim** — see [Known limitations](#known-limitations) for the full, specific list of what is and isn't proven yet, and what closes each gap.
+At the same time, this project is upfront about what it can't yet claim. The dataset shipped in `datasets/` is a tiny **synthetic placeholder** (48 non-photographic files) used purely to prove that every stage of the pipeline runs correctly end-to-end. **No accuracy number in this repository should be read as a real-world performance claim.** See [Known limitations](#known-limitations) for the full, specific list of gaps and exactly what closes each one.
+
+---
+
+## Why "multi-stream"?
+
+A single deepfake detector trained only on pixels can be fooled, or can overfit to artifacts specific to one generation method. TrueSight instead looks for manipulation evidence in four *independent* places at once, so a fake has to fool all of them simultaneously to slip through:
+
+| Stream | What it looks at | Why it catches fakes |
+|---|---|---|
+| **Spatial** | Raw pixels of the face | Visual blending, warping, and texture inconsistencies |
+| **Frequency** | FFT/DCT of the image | Periodic artifacts generative models leave in the frequency domain, invisible in raw pixels |
+| **Noise** | Sensor-noise residual (SRM filters) | Manipulation disturbs a camera's noise "fingerprint" even when the image looks clean |
+| **Physiological** *(video only)* | Blink rate, pulse signal (rPPG) | Deepfakes struggle to fake a biologically consistent heartbeat or natural blink pattern |
+
+The results are then merged by a fusion model rather than simply averaged, so the system can learn which streams to trust more in which situations.
 
 ---
 
 ## Quick start
+
+If you just want to see it run:
 
 ```bash
 git clone <this-repo>
@@ -75,7 +96,7 @@ cd TrueSight
 python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Train every model on the bundled placeholder dataset (fast, a few minutes total)
+# Train every model on the bundled placeholder dataset (fast — a few minutes total)
 python -m preprocessing.build_metadata
 python -m preprocessing.split_dataset
 python -m spatial.train
@@ -85,34 +106,40 @@ python -m fusion.build_dataset
 python -m fusion.meta_classifier
 python -m fusion.train_calibration
 
-# Run the demo
+# Run the demo on one file
 python -m demo.run_demo path/to/your/image.jpg
 ```
 
-Or start the full backend + frontend and use it in a browser — see [Running the system](#running-the-system).
+For the full web experience (upload a file in a browser and see heatmaps), see [Running the system](#running-the-system).
 
 ---
 
 ## Full setup, step by step
 
+This section explains each step in more detail — useful if something in Quick Start didn't work, or if you want to understand what each command actually does.
+
 ### 1. Prerequisites
 
-| Requirement | Version | Why |
+| Requirement | Version | Why you need it |
 |---|---|---|
-| Python | 3.11+ | Core runtime |
-| Node.js | 18+ | Frontend build |
-| pip | latest | Package installation |
-| CUDA GPU | optional | Faster training; everything also runs on CPU |
-| Docker | optional | Containerized deployment |
+| Python | 3.11+ | Runs the entire ML pipeline and backend |
+| Node.js | 18+ | Builds and runs the frontend |
+| pip | latest | Installs Python packages |
+| CUDA GPU | optional | Speeds up training; everything also works on a normal CPU, just slower |
+| Docker | optional | Only needed if you want containerized deployment |
 
-### 2. Clone and create a virtual environment
+### 2. Clone the repository and create a virtual environment
+
+A virtual environment keeps this project's Python packages separate from everything else on your machine, so nothing conflicts.
 
 ```bash
 git clone <this-repo>
 cd TrueSight
 python3.11 -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
+source venv/bin/activate      # on Windows, use: venv\Scripts\activate
 ```
+
+You'll know it worked if your terminal prompt now starts with `(venv)`.
 
 ### 3. Install Python dependencies
 
@@ -120,9 +147,9 @@ source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Installs PyTorch, torchvision, timm (EfficientNet), MediaPipe, OpenCV, XGBoost, scikit-learn, FastAPI, ONNX/ONNX Runtime, and everything else the pipeline needs.
+This one command installs everything the project needs: PyTorch and torchvision (deep learning), `timm` (EfficientNet backbone), MediaPipe (face detection), OpenCV and NumPy/SciPy (image and signal processing), XGBoost and scikit-learn (the fusion model), FastAPI and Uvicorn (the backend server), ONNX/ONNX Runtime (faster deployment), and Pillow (image I/O).
 
-> **MediaPipe note:** face detection and landmark extraction default to a real MediaPipe model, but that model file (`.task` format) must be downloaded separately (see step 6). Without it, the pipeline automatically falls back to an OpenCV Haar cascade for face detection and a fixed-geometry estimate for landmarks — this keeps every command below runnable offline, but detection accuracy and blink/rPPG signal quality will be materially worse until you fetch the real model. This fallback is intentional and logged clearly at runtime.
+> **MediaPipe note:** by default, face detection and landmark extraction use a real MediaPipe model — but the model file (`.task` format) has to be downloaded separately (see step 6 below). Until you do that, the pipeline automatically falls back to a simpler OpenCV Haar-cascade detector and a fixed-geometry landmark estimate. This keeps everything runnable offline from the start, but detection accuracy — and blink/rPPG signal quality specifically — will be noticeably worse until you fetch the real model. The fallback is intentional, and it's logged clearly whenever it kicks in.
 
 ### 4. Verify your environment
 
@@ -130,7 +157,7 @@ Installs PyTorch, torchvision, timm (EfficientNet), MediaPipe, OpenCV, XGBoost, 
 python -m tests.env_check
 ```
 
-Confirms PyTorch, CUDA (if available), OpenCV, MediaPipe, NumPy, FastAPI, scikit-learn, and XGBoost are all importable, and reports whether a GPU was detected.
+This checks that PyTorch, CUDA (if you have a GPU), OpenCV, MediaPipe, NumPy, FastAPI, scikit-learn, and XGBoost are all correctly installed and importable, and tells you whether it found a GPU. Run this before anything else — it catches most setup problems in a few seconds.
 
 ### 5. Install frontend dependencies
 
@@ -150,17 +177,18 @@ curl -L -o models/mediapipe/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
 ```
 
-Update `configs/pipeline.yaml` with the resulting paths if placed elsewhere. Without this step the system still runs (see the fallback note above) but face detection and the physiological stream will not be accurate.
+If you place the files somewhere else, update the paths in `configs/pipeline.yaml` to match. Skipping this step is fine for exploring the codebase, but face detection and the physiological (blink/pulse) stream won't be accurate without it.
 
 ### 7. Build the dataset and train every model
 
-The repo ships with a small **synthetic placeholder dataset** under `datasets/` so the full pipeline can be exercised without real deepfake corpora on day one. Replace it with real data (FaceForensics++, DFDC, Celeb-DF v2, DeeperForensics-1.0) using the same folder structure for anything beyond pipeline validation.
+The repo ships with a small **synthetic placeholder dataset** under `datasets/`, so you can run the entire pipeline on day one without needing a real deepfake dataset. For anything beyond exploring how the pipeline works, swap in a real dataset (FaceForensics++, DFDC, Celeb-DF v2, or DeeperForensics-1.0) using the same folder layout.
 
 ```bash
-# 1. Build dataset metadata (file_path, dataset, label, manipulation_type, video_id, person_id)
+# 1. Build dataset metadata (file path, dataset, label, manipulation type, video id, person id)
 python -m preprocessing.build_metadata
 
-# 2. Leakage-safe train/val/test split (splits by identity, never by frame)
+# 2. Leakage-safe train/val/test split (splits by identity, never by individual frame,
+#    so the same person never appears in both training and test data)
 python -m preprocessing.split_dataset
 
 # 3. Train the spatial stream (EfficientNet-B0)
@@ -172,17 +200,17 @@ python -m frequency_noise.train --epochs 3
 # 5. Train the noise stream (SRM-residual-based lightweight CNN)
 python -m frequency_noise.train_noise --epochs 3
 
-# 6. Build the fusion training dataset (runs every trained stream over the split)
+# 6. Build the fusion training set (runs every trained stream over the split data)
 python -m fusion.build_dataset
 
-# 7. Train and compare XGBoost / Logistic Regression / small MLP, keep the best
+# 7. Train and compare XGBoost / Logistic Regression / a small MLP, and keep the best one
 python -m fusion.meta_classifier
 
 # 8. Fit temperature-scaling calibration on the fusion model's validation predictions
 python -m fusion.train_calibration
 ```
 
-At this point every model artifact needed by the backend exists under `models/`.
+Once this finishes, every model file the backend needs exists under `models/`.
 
 ### 8. (Optional) Export the spatial model to ONNX for faster inference
 
@@ -194,36 +222,40 @@ python -m spatial.export_onnx
 
 ## Running the system
 
-### Option A — backend + frontend (recommended)
+### Option A — full backend + frontend (recommended)
 
-**Terminal 1 — backend:**
+Open two terminal windows.
+
+**Terminal 1 — start the backend:**
 
 ```bash
 source venv/bin/activate
 uvicorn backend.main:app --reload
 ```
 
-API live at `http://127.0.0.1:8000`. Interactive docs at `http://127.0.0.1:8000/docs`.
+The API is now live at `http://127.0.0.1:8000`, with interactive, browsable documentation at `http://127.0.0.1:8000/docs`.
 
-**Terminal 2 — frontend:**
+**Terminal 2 — start the frontend:**
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The Vite dev server proxies `/analyze`, `/result`, `/health`, and `/static` to the backend (see `frontend/vite.config.js`), so no CORS configuration is needed.
+Open `http://127.0.0.1:5173` in your browser. The dev server automatically forwards API requests to the backend (see `frontend/vite.config.js`), so you don't need to configure anything else.
 
-Upload an image or video to see: the REAL/FAKE verdict, calibrated confidence, an evidence-based explanation, and — per detected face — a Grad-CAM++ heatmap, all six stream scores, and flagged suspicious regions.
+Upload an image or video and you'll see: the REAL/FAKE verdict, a calibrated confidence score, a plain-language evidence-based explanation, and — for every detected face — a Grad-CAM++ heatmap, all stream scores, and the specific facial regions flagged as suspicious.
 
-### Option B — one-shot CLI demo
+### Option B — quick one-shot CLI demo
+
+If you just want to test one file without launching a server:
 
 ```bash
 python -m demo.run_demo path/to/image.jpg
 python -m demo.run_demo path/to/video.mp4
 ```
 
-Runs the complete pipeline against one file and prints the full JSON result.
+This runs the complete pipeline on that one file and prints the full result as JSON straight to your terminal.
 
 ---
 
@@ -231,11 +263,11 @@ Runs the complete pipeline against one file and prints the full JSON result.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET`  | `/health` | Reports whether every required model checkpoint is present |
+| `GET`  | `/health` | Reports whether every required model checkpoint is present and ready |
 | `POST` | `/analyze/image` | Upload a JPG/PNG, get back the full analysis |
 | `POST` | `/analyze/video` | Upload an MP4/AVI/MOV/MKV, get back the full analysis |
 | `GET`  | `/result/{id}` | Re-fetch a previously computed result by its id |
-| `GET`  | `/static/heatmaps/{filename}` | Serves generated Grad-CAM++ heatmap images |
+| `GET`  | `/static/heatmaps/{filename}` | Serves the generated Grad-CAM++ heatmap images |
 
 **Example response** (`POST /analyze/image`):
 
@@ -266,9 +298,11 @@ Runs the complete pipeline against one file and prints the full JSON result.
 }
 ```
 
-`blink_score`, `rppg_score`, and `temporal_score` stay at the neutral default `0.5` for image input, since those three streams are inherently video-only (they need a sequence of frames for the same tracked face). For video input, all seven fields carry genuine computed values.
+A few things worth explaining about that response:
 
-**Multi-face aggregation policy:** if any detected face is predicted FAKE, the overall verdict is FAKE, with confidence equal to the highest calibrated confidence among the FAKE-predicted faces. If every face is predicted REAL, overall confidence is `1 - (highest fake-probability seen across faces)`. This is a documented design decision (the plan doesn't specify one) — see `backend/services/orchestrator.py`.
+- `blink_score`, `rppg_score`, and `temporal_score` stay at the neutral default `0.5` for **image** input — these three streams are inherently video-only, since they need a sequence of frames from the same tracked face to mean anything. For **video** input, all seven score fields carry genuine, computed values.
+- `metadata_flag` comes from checking EXIF/codec/compression data. It's *supporting* evidence only — on its own, no metadata flag can push a verdict past "mildly suspicious."
+- **Multi-face aggregation policy:** if *any* detected face is predicted FAKE, the overall verdict is FAKE, with confidence equal to the highest calibrated confidence among the FAKE-predicted faces. If every face is predicted REAL, the overall confidence is `1 - (highest fake-probability seen across any face)`. This is a deliberate design decision (the original spec didn't dictate one) — see `backend/services/orchestrator.py` for the implementation.
 
 ---
 
@@ -277,40 +311,42 @@ Runs the complete pipeline against one file and prints the full JSON result.
 ```
 TrueSight/
 |-- preprocessing/     Face detection, alignment, tracking, dataset engine
-|-- spatial/            EfficientNet-B0 classifier, training, TTA, ONNX export
-|-- frequency_noise/    FFT/DCT frequency stream + SRM noise stream
-|-- physiological/      Blink (EAR), rPPG, temporal aggregation
+|-- spatial/           EfficientNet-B0 classifier: training, test-time augmentation, ONNX export
+|-- frequency_noise/   FFT/DCT frequency stream + SRM noise stream
+|-- physiological/     Blink (EAR), rPPG, temporal aggregation
 |-- fusion/             Feature standardization, meta-classifier, calibration
-|-- explainability/     Grad-CAM++, heatmaps, region localization
-|-- metadata/           EXIF / codec / compression supporting-evidence analysis
-|-- evaluation/         Robustness (degradation + adversarial), cross-dataset eval
-|-- backend/            FastAPI app: routes, schemas, orchestration
-|-- frontend/           React + Vite UI
-|-- demo/               One-shot CLI demo script
-|-- models/             Trained weights (gitignored, see setup)
-|-- datasets/           Dataset folders + metadata CSVs (synthetic placeholder shipped)
-|-- configs/            Shared pipeline.yaml -- paths, thresholds, module I/O contracts
-|-- tests/              288 tests covering every module above
+|-- explainability/    Grad-CAM++, heatmaps, region localization
+|-- metadata/          EXIF / codec / compression supporting-evidence analysis
+|-- evaluation/        Robustness testing (degradation + adversarial), cross-dataset eval
+|-- backend/           FastAPI app: routes, schemas, orchestration
+|-- frontend/          React + Vite UI
+|-- demo/              One-shot CLI demo script
+|-- models/            Trained weights (gitignored — created by the training steps above)
+|-- datasets/          Dataset folders + metadata CSVs (synthetic placeholder shipped)
+|-- configs/           Shared pipeline.yaml — paths, thresholds, module I/O contracts
+|-- tests/             288 tests covering every module above
 |-- Dockerfile.backend / Dockerfile.frontend / docker-compose.yml
 `-- requirements.txt
 ```
 
-Every stream module follows the same convention: a `train.py` (or equivalent) that produces a checkpoint under `models/`, and an `inference.py` that loads it and exposes a `score_face()` / `score_faces()` method returning a fixed, documented contract (e.g. `{"face_id": int, "spatial_score": float}`). These contracts live in `configs/pipeline.yaml` under `contracts:` as the single source of truth — every module reads from there rather than hardcoding field names, which is what lets independently-built streams plug into fusion without drifting out of sync.
+Every stream module follows the same convention, which is worth understanding if you plan to read or extend the code: a `train.py` (or equivalent) produces a checkpoint saved under `models/`, and an `inference.py` loads that checkpoint and exposes a `score_face()` / `score_faces()` method that returns a fixed, documented output shape (e.g. `{"face_id": int, "spatial_score": float}`). These output shapes are all defined in one place — `configs/pipeline.yaml`, under `contracts:` — rather than hardcoded inside each module. That's what lets streams that were built independently plug into fusion without silently drifting out of sync with each other.
 
 ---
 
 ## How the pipeline works
 
-1. **Preprocessing** — a frame (or the whole image) goes through face detection (MediaPipe, with an offline Haar-cascade fallback), landmark-based alignment to a standardized 224x224 crop, and — for video — IoU-based tracking so the same person keeps the same `face_id` across frames.
+A step-by-step walk-through of what happens to a file from the moment it's uploaded to the moment a verdict comes back:
+
+1. **Preprocessing** — the frame (or the whole image) goes through face detection (MediaPipe, with an offline Haar-cascade fallback), landmark-based alignment into a standardized 224×224 crop, and, for video, IoU-based tracking so the same person keeps the same `face_id` across frames.
 2. **Spatial stream** — EfficientNet-B0 examines the raw face crop for visual manipulation artifacts.
 3. **Frequency stream** — FFT and DCT expose periodic artifacts in the frequency domain that generation models often leave behind, invisible in the raw pixels.
 4. **Noise stream** — SRM high-pass filters isolate the sensor-noise residual; manipulation disturbs this fingerprint even when the visible image looks clean.
-5. **Physiological stream** *(video only)* — Eye Aspect Ratio tracks blink rate/duration against natural human ranges; rPPG extracts a subtle skin-color pulse signal and checks whether it's genuinely periodic in the plausible heart-rate band.
-6. **Temporal analysis** *(video only)* — aggregates per-frame stream scores using moving averages and a frame-to-frame consistency penalty: flickering evidence is itself treated as suspicious, not just averaged away.
-7. **Metadata analysis** — EXIF/codec/compression flags feed fusion as *supporting* evidence only; no single metadata flag can push a verdict past mild suspicion on its own.
-8. **Fusion** — all seven signals are combined by a meta-classifier (XGBoost, chosen automatically after comparison against Logistic Regression and a small MLP).
-9. **Calibration** — temperature scaling turns the raw fusion probability into a genuinely trustworthy confidence value.
-10. **Explainability** — Grad-CAM++ (implemented directly via hooks on EfficientNet's `bn2` layer) produces a heatmap; the heatmap is broken into 8 named face regions, ranked by activation intensity, and turned into an evidence-grounded text explanation — every sentence cites an actual computed number, never a canned template.
+5. **Physiological stream** *(video only)* — Eye Aspect Ratio tracks blink rate and duration against natural human ranges, while rPPG extracts a subtle skin-color pulse signal and checks whether it's genuinely periodic within a plausible heart-rate range.
+6. **Temporal analysis** *(video only)* — aggregates per-frame stream scores using moving averages and a frame-to-frame consistency penalty: flickering evidence is itself treated as suspicious, not simply averaged away.
+7. **Metadata analysis** — EXIF/codec/compression flags feed into fusion as supporting evidence only.
+8. **Fusion** — all seven signals are combined by a meta-classifier (XGBoost, automatically chosen after comparison against Logistic Regression and a small MLP).
+9. **Calibration** — temperature scaling turns the raw fusion probability into a genuinely trustworthy confidence value, so "90% confidence" actually means what it sounds like.
+10. **Explainability** — Grad-CAM++ (implemented directly via hooks on EfficientNet's `bn2` layer) produces a heatmap; that heatmap is broken into 8 named facial regions, ranked by activation intensity, and turned into an evidence-grounded text explanation — every sentence cites an actual computed number rather than a canned template.
 
 ---
 
@@ -320,15 +356,15 @@ Every stream module follows the same convention: a `train.py` (or equivalent) th
 pytest tests/ -q
 ```
 
-**288 tests, all passing.** Every phase of the pipeline has its own dedicated test file (`tests/test_<phase>.py`), covering unit-level correctness, integration across phases, and full end-to-end orchestration through real HTTP requests via FastAPI's `TestClient`.
+**288 tests, all passing.** Every phase of the pipeline has its own dedicated test file (`tests/test_<phase>.py`), covering unit-level correctness of individual functions, integration across phases, and full end-to-end checks made through real HTTP requests via FastAPI's `TestClient`.
 
-Slow tests (leave-one-dataset-out retraining) are marked and can be skipped:
+To skip the slower tests (which retrain models in a leave-one-dataset-out setup):
 
 ```bash
 pytest tests/ -q -m "not slow"
 ```
 
-Some tests are automatically skipped if their corresponding checkpoint hasn't been trained yet — run the training commands in [step 7](#7-build-the-dataset-and-train-every-model) first for full coverage.
+Note: some tests are automatically skipped if their corresponding model checkpoint hasn't been trained yet — run the training commands in [step 7](#7-build-the-dataset-and-train-every-model) first if you want full test coverage.
 
 ---
 
@@ -338,9 +374,9 @@ Some tests are automatically skipped if their corresponding checkpoint hasn't be
 docker compose up --build
 ```
 
-Starts the backend (FastAPI, port `8000`) and frontend (React, built and served via nginx, port `3000`) as separate containers. Trained model weights must already exist under `models/` before building.
+This starts the backend (FastAPI, port `8000`) and the frontend (React, built and served via nginx, port `3000`) as two separate containers. Trained model weights must already exist under `models/` before you build the images.
 
-> **Honesty note:** `Dockerfile.backend`, `Dockerfile.frontend`, and `docker-compose.yml` were written and reviewed carefully for correctness (correct system libraries for OpenCV/MediaPipe, correct multi-stage frontend build, correct proxy routing) but could not be build-tested in the sandbox this project was developed in (no Docker daemon available there). Run a real `docker compose up --build` and fix anything that surfaces before a live demo.
+> **Honesty note:** `Dockerfile.backend`, `Dockerfile.frontend`, and `docker-compose.yml` were written and reviewed carefully for correctness (correct system libraries for OpenCV/MediaPipe, a correct multi-stage frontend build, correct reverse-proxy routing) but could not be build-tested in the sandbox this project was developed in, since no Docker daemon was available there. Run a real `docker compose up --build` yourself and fix anything that surfaces before relying on it for a live demo.
 
 ### ONNX Runtime (optional, faster CPU inference)
 
@@ -348,32 +384,32 @@ Starts the backend (FastAPI, port `8000`) and frontend (React, built and served 
 python -m spatial.export_onnx
 ```
 
-Produces `models/spatial/efficientnet_b0.onnx`, verified numerically identical to the PyTorch model's output (max difference `0.0` across 10 diverse test inputs — see `tests/test_deployment.py`), and measured ~1.76x faster on CPU in local testing. Use `spatial.onnx_inference.SpatialONNXInference` as a drop-in replacement for `spatial.inference.SpatialInference`.
+This produces `models/spatial/efficientnet_b0.onnx`, verified numerically identical to the PyTorch model's output (maximum difference of `0.0` across 10 diverse test inputs — see `tests/test_deployment.py`), and measured roughly 1.76× faster on CPU in local testing. Use `spatial.onnx_inference.SpatialONNXInference` as a drop-in replacement for `spatial.inference.SpatialInference` wherever CPU speed matters.
 
 ---
 
 ## Known limitations
 
-This project was built with one rule throughout: **every simplification gets stated out loud, not hidden.**
+This project was built around one rule: **every simplification gets stated out loud, not hidden.**
 
 | Limitation | Detail | What closes it |
 |---|---|---|
-| Synthetic placeholder dataset | `datasets/` ships with 48 tiny, non-photographic files — enough to validate every pipeline stage runs correctly, not enough for any real accuracy claim. | Drop in real datasets (FaceForensics++, DFDC, Celeb-DF v2, DeeperForensics-1.0) using the same folder structure. |
-| No pretrained ImageNet weights by default | `pretrained=True` requires downloading weights from HuggingFace Hub, which needed network access unavailable during development. All shipped checkpoints were trained `pretrained=False`. | Run `python -m spatial.train --pretrained` with network access. |
+| Synthetic placeholder dataset | `datasets/` ships with 48 tiny, non-photographic files — enough to validate that every pipeline stage runs correctly, not enough for any real accuracy claim. | Drop in real datasets (FaceForensics++, DFDC, Celeb-DF v2, DeeperForensics-1.0) using the same folder structure. |
+| No pretrained ImageNet weights by default | `pretrained=True` requires downloading weights from the HuggingFace Hub, which needed network access unavailable during development. All shipped checkpoints were trained with `pretrained=False`. | Run `python -m spatial.train --pretrained` with network access. |
 | MediaPipe models not bundled | Real face/landmark detection needs a network download (see setup step 6). Without it, the system falls back to an OpenCV Haar cascade and a fixed-geometry landmark estimate. | Fetch the `.task`/`.tflite` files and update `configs/pipeline.yaml`. |
 | Blink/rPPG accuracy depends on real landmarks | The geometric fallback returns fixed coordinates regardless of pixel content, so blink detection is structurally correct but not signal-accurate until real MediaPipe landmarks are in use. | Same as above. |
-| Fusion training data has neutral-default video streams | `fusion/build_dataset.py` sets `blink_score`/`rppg_score`/`temporal_score` to 0.5 for every training row, since the dataset loader is file-level, not frame-sequence-level. Real values are computed correctly at inference time. | Extend `fusion/build_dataset.py` to run the physiological stream over real video files. |
-| Multi-stream cross-dataset evaluation has partial leakage | The fusion classifier is retrained fresh per held-out dataset, but the spatial/frequency/noise scores it trains on come from models that saw all datasets during their own training. Flagged in the evaluation's own return value. | Retrain spatial/frequency/noise fresh per fold too, with real data and more compute. |
-| Docker not build-tested | See Docker deployment above. | Run `docker compose up --build` where a Docker daemon is available. |
-| Multi-face aggregation policy is a design choice | The plan doesn't specify how to combine multiple faces' verdicts; see the stated policy in API reference. | Revisit if the deployment context needs a different policy. |
+| Fusion training data has neutral-default video streams | `fusion/build_dataset.py` sets `blink_score`/`rppg_score`/`temporal_score` to 0.5 for every training row, since the dataset loader is file-level, not frame-sequence-level. Real values are still computed correctly at inference time. | Extend `fusion/build_dataset.py` to run the physiological stream over real video files. |
+| Multi-stream cross-dataset evaluation has partial leakage | The fusion classifier is retrained fresh per held-out dataset, but the spatial/frequency/noise scores it trains on come from models that saw all datasets during their own training. This is flagged in the evaluation's own return value. | Retrain spatial/frequency/noise fresh per fold too, with real data and more compute. |
+| Docker not build-tested | See the Docker deployment section above. | Run `docker compose up --build` in an environment with a Docker daemon available. |
+| Multi-face aggregation policy is a design choice | The original plan didn't specify how to combine multiple faces' verdicts; see the stated policy in the API reference section. | Revisit if a real deployment needs a different policy. |
 
-None of these are hidden — each surfaced through this project's own test suite or a deliberate real-input sanity check, and each is flagged inline in the relevant module's docstring too.
+None of these are hidden — each surfaced through this project's own test suite or a deliberate real-input sanity check, and each is also flagged inline in the relevant module's docstring.
 
 ---
 
 ## Development order
 
-Built and verified phase by phase, each one tested with real inputs before moving to the next:
+Built and verified phase by phase, with each phase tested against real inputs before moving on to the next:
 
 1. Foundation (repo structure, shared config, environment check)
 2. Dataset engine (leakage-safe train/val/test split)
@@ -410,6 +446,23 @@ Built and verified phase by phase, each one tested with real inputs before movin
 | M5 | Fusion + calibration + XAI |
 | M6 | FastAPI + React + integration + deployment |
 
-**Project:** TrueSight -- Team CipherForge
+**Project:** TrueSight — Team CipherForge
 **Event:** Smart India Hackathon 2026
 **Theme:** Cyber Security
+
+---
+
+## Glossary
+
+A quick reference for terms used throughout this document, for anyone new to deepfake detection or ML:
+
+- **Deepfake** — media (image or video) where a face has been synthetically generated or swapped using AI.
+- **EfficientNet-B0** — a compact, efficient convolutional neural network architecture used here as the spatial stream's backbone.
+- **FFT / DCT** — Fast Fourier Transform / Discrete Cosine Transform; mathematical tools that convert an image into its frequency components, revealing patterns invisible in raw pixels.
+- **SRM (Spatial Rich Model)** — a set of high-pass filters originally designed for steganalysis, repurposed here to expose sensor-noise inconsistencies.
+- **rPPG (remote photoplethysmography)** — a technique for detecting a person's heartbeat from tiny, invisible-to-the-eye color changes in video of their skin.
+- **EAR (Eye Aspect Ratio)** — a simple geometric ratio computed from eye landmarks, used to detect blinks.
+- **Fusion / meta-classifier** — the model that takes all individual stream scores and combines them into one final decision.
+- **Calibration** — the process of adjusting a model's raw output so that its confidence score reflects true likelihood (a well-calibrated 80% confidence should be right about 80% of the time).
+- **Grad-CAM++** — a technique for visualizing which parts of an image a neural network focused on when making its decision, produced as a heatmap.
+- **ONNX** — an open format for representing trained models so they can run efficiently across different hardware/runtimes.
