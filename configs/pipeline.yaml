@@ -1,0 +1,85 @@
+# TrueSight — shared pipeline configuration
+# This file is the single source of truth for paths, thresholds, and
+# module I/O contracts. Every module reads from here instead of
+# hardcoding values, so integration doesn't break silently.
+
+project:
+  name: TrueSight
+  version: "0.1.0-prototype"
+
+paths:
+  datasets_root: "datasets/"
+  models_root: "models/"
+  spatial_weights: "models/spatial/efficientnet_b0.pt"
+  frequency_weights: "models/frequency/frequency_model.pt"
+  noise_weights: "models/noise/noise_model.pt"
+  fusion_weights: "models/fusion/xgboost_fusion.json"
+  calibration_weights: "models/fusion/temperature_scale.json"
+  heatmap_output_dir: "backend/static/heatmaps/"
+
+preprocessing:
+  face_crop_size: 224          # all streams consume 224x224 aligned faces
+  face_detector: "mediapipe"
+  min_detection_confidence: 0.6
+  max_faces: 5
+
+spatial:
+  backbone: "efficientnet_b0"      # backup: xception
+  input_size: 224
+  num_classes: 2                   # real, fake
+
+frequency_noise:
+  transforms: ["dct", "fft"]
+  noise_filter: "srm"
+
+physiological:
+  ear_blink_threshold: 0.21        # eye-aspect-ratio threshold for closed eye
+  rppg_window_seconds: 10
+  min_frames_required: 30          # below this, physiological stream abstains
+
+fusion:
+  model: "xgboost"                 # compare: logistic_regression, mlp
+  inputs:
+    - spatial_score
+    - frequency_score
+    - noise_score
+    - blink_score
+    - rppg_score
+    - temporal_score
+    - metadata_flag
+
+calibration:
+  method: "temperature_scaling"
+
+decision:
+  fake_threshold: 0.5              # calibrated_confidence >= this => FAKE
+
+# --- Fixed module I/O contracts ---
+# Every stream module must return exactly these fields. Do not add or
+# rename fields without updating this file and notifying the whole team.
+contracts:
+  spatial_output:
+    face_id: int
+    spatial_score: float          # 0.0 (real) - 1.0 (fake)
+
+  frequency_output:
+    face_id: int
+    frequency_score: float
+
+  noise_output:
+    face_id: int
+    noise_score: float
+
+  physiological_output:
+    face_id: int
+    blink_score: float
+    rppg_score: float
+
+  temporal_output:
+    face_id: int
+    temporal_score: float
+
+  fusion_output:
+    prediction: string            # "REAL" | "FAKE"
+    raw_score: float
+    calibrated_confidence: float

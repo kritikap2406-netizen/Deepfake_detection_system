@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Datasets (never commit raw media)
+datasets/*
+!datasets/.gitkeep
+
+# Trained model weights (large binaries)
+models/**/*.pt
+models/**/*.pth
+models/**/*.onnx
+models/**/*.onnx.data
+models/**/*.joblib
+models/**/*.json
+!models/**/.gitkeep
+
+# Runtime-generated heatmap images (regenerated per request, not source)
+backend/static/heatmaps/*
+!backend/static/heatmaps/.gitkeep
+
+# Env / secrets
+.env
+*.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Test / cache
+.pytest_cache/
+htmlcov/
+.coverage
+
+# SQLite
+*.db
+*.sqlite3

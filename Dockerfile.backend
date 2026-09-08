@@ -1,0 +1,44 @@
+# TrueSight backend — FastAPI + ML inference pipeline
+#
+# NOTE: this Dockerfile was written and reviewed for correctness but
+# could not be built/run in the development sandbox used to build
+# TrueSight (no Docker daemon available there). Verify with a real
+# `docker build` before relying on it for the SIH demo.
+
+FROM python:3.11-slim
+
+# System libraries required by opencv-python and mediapipe at runtime
+# (headless environments are missing these by default).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Application code and config
+COPY backend/ backend/
+COPY preprocessing/ preprocessing/
+COPY spatial/ spatial/
+COPY frequency_noise/ frequency_noise/
+COPY physiological/ physiological/
+COPY fusion/ fusion/
+COPY explainability/ explainability/
+COPY metadata/ metadata/
+COPY configs/ configs/
+COPY configs_loader.py .
+
+# Trained model weights — see README for how these are produced
+# (spatial/train.py, frequency_noise/train.py, etc.) if not already present.
+COPY models/ models/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
