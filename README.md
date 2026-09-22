@@ -1,6 +1,6 @@
-# TrueSight
+# TrueSight : Multi-stream deepfake detection system
 
-**Multi-stream deepfake detection system**
+
 Smart India Hackathon 2024 problem statement · Theme: Cyber Security · 
 
 TrueSight looks at a face in an image or video and answers one question: *has this face been digitally manipulated?* Instead of trusting a single AI model, it runs **four independent detection streams** on every face it finds, combines their evidence with a calibrated decision model, and — critically — **explains its reasoning** with heatmaps and plain-language evidence, instead of just printing "Fake" or "Real" with no justification.
